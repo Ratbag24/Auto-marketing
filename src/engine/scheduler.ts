@@ -8,6 +8,9 @@ import {
 } from "../db/index.js";
 import { runMetricsSweep } from "./metrics.js";
 import { runPublishSweep } from "./publisher.js";
+import { runMonitorSweep } from "../web/monitor.js";
+import { crawlWebsite } from "../web/crawler.js";
+import { listWebsites } from "../db/websites.js";
 
 /**
  * The whole scheduler. Three timers in one process - no cron daemon, no queue
@@ -99,6 +102,37 @@ export async function runPlanningSweep(now = new Date()): Promise<{
   return { planned, skipped };
 }
 
+/** Re-crawls any site whose content has not been read for a while. */
+export async function runCrawlSweep(now = new Date()): Promise<{
+  crawled: number;
+  skipped: number;
+}> {
+  let crawled = 0;
+  let skipped = 0;
+
+  for (const site of listWebsites()) {
+    const due =
+      site.last_crawled_at === null ||
+      now.getTime() - new Date(site.last_crawled_at).getTime() >=
+        config.crawlIntervalHours * 3600_000;
+    if (!due) {
+      skipped += 1;
+      continue;
+    }
+    try {
+      const result = await crawlWebsite(site);
+      crawled += 1;
+      console.log(`[crawl] ${site.url}: ${result.pagesCrawled} pages`);
+    } catch (err) {
+      console.error(
+        `[crawl] ${site.url} failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  return { crawled, skipped };
+}
+
 export function startScheduler(): void {
   if (running) return;
   running = true;
@@ -112,10 +146,18 @@ export function startScheduler(): void {
     (config.planIntervalHours * 3600_000) / 4,
   );
 
+  const monitorEvery = config.monitorIntervalMinutes * MINUTE;
+  const crawlCheckEvery = Math.max(
+    30 * MINUTE,
+    (config.crawlIntervalHours * 3600_000) / 4,
+  );
+
   timers = [
     setInterval(() => void guard("publish", runPublishSweep), publishEvery),
     setInterval(() => void guard("metrics", runMetricsSweep), metricsEvery),
     setInterval(() => void guard("plan", runPlanningSweep), planCheckEvery),
+    setInterval(() => void guard("monitor", runMonitorSweep), monitorEvery),
+    setInterval(() => void guard("crawl", runCrawlSweep), crawlCheckEvery),
   ];
 
   // Unref so the timers never hold the process open on their own.
@@ -124,11 +166,13 @@ export function startScheduler(): void {
   console.log(
     `[scheduler] publish every ${config.publishIntervalMinutes}m, ` +
       `metrics every ${config.metricsIntervalMinutes}m, ` +
+      `site checks every ${config.monitorIntervalMinutes}m, ` +
       `plan check every ${Math.round(planCheckEvery / MINUTE)}m`,
   );
 
   // Do a first pass straight away rather than waiting out the first interval.
   void guard("publish", runPublishSweep);
+  void guard("monitor", runMonitorSweep);
 }
 
 export function stopScheduler(): void {

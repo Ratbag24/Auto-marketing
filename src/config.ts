@@ -36,7 +36,13 @@ export const config = {
   // it; widen this union once the SDK catches up.
   plannerEffort: str("PLANNER_EFFORT", "high") as Effort,
 
+  // Public origin this server is reachable at. The tracking snippet points
+  // here, so it must be the address a visitor's browser can resolve.
+  publicUrl: str("PUBLIC_URL", ""),
+
   publishIntervalMinutes: num("PUBLISH_INTERVAL_MINUTES", 5),
+  monitorIntervalMinutes: num("MONITOR_INTERVAL_MINUTES", 5),
+  crawlIntervalHours: num("CRAWL_INTERVAL_HOURS", 168),
   metricsIntervalMinutes: num("METRICS_INTERVAL_MINUTES", 60),
   planIntervalHours: num("PLAN_INTERVAL_HOURS", 168),
   publishingEnabled: bool("PUBLISHING_ENABLED", true),

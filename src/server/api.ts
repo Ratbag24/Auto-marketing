@@ -22,6 +22,18 @@ import { runMetricsSweep } from "../engine/metrics.js";
 import { runPublishSweep } from "../engine/publisher.js";
 import { runPlanningSweep } from "../engine/scheduler.js";
 import { buildBusinessStats } from "../engine/stats.js";
+import { buildWebsiteOverview } from "../engine/audience.js";
+import { runMonitorSweep, checkWebsite } from "../web/monitor.js";
+import { crawlWebsite } from "../web/crawler.js";
+import { runCrawlSweep } from "../engine/scheduler.js";
+import { assertFetchable } from "../web/url-guard.js";
+import { snippetFor } from "../web/tracker.js";
+import {
+  createWebsite,
+  deleteWebsite,
+  updateWebsite,
+  websiteForBusiness,
+} from "../db/websites.js";
 
 export interface ApiResult {
   status: number;
@@ -182,6 +194,130 @@ export async function handleApi(
       return brand ? ok(brand) : missing("Brand profile");
     }
 
+    // ---- website -------------------------------------------------------
+
+    if (method === "GET" && sub === "website") {
+      const overview = buildWebsiteOverview(business.id);
+      const base = config.publicUrl || `http://localhost:${config.port}`;
+      return ok({
+        ...overview,
+        snippet: overview.website
+          ? snippetFor(base, overview.website.tracking_key)
+          : null,
+      });
+    }
+
+    if (method === "POST" && sub === "website") {
+      const raw = typeof body["url"] === "string" ? body["url"] : "";
+      if (raw.trim() === "") return bad('"url" is required');
+
+      // Resolve before storing: refuse anything that points at a private
+      // address, so this server cannot be aimed at an internal host.
+      const check = await assertFetchable(raw);
+      if (!check.ok || !check.url) {
+        return bad(check.reason ?? "That address cannot be monitored.");
+      }
+
+      const existing = websiteForBusiness(business.id);
+      if (existing) {
+        const updated = updateWebsite(existing.id, {
+          url: check.url.origin,
+          expected_text:
+            typeof body["expected_text"] === "string"
+              ? body["expected_text"].slice(0, 200)
+              : existing.expected_text,
+          goal_path:
+            typeof body["goal_path"] === "string"
+              ? body["goal_path"].slice(0, 200)
+              : existing.goal_path,
+        });
+        return ok({ website: updated, created: false });
+      }
+
+      const site = createWebsite(business.id, check.url.origin, {
+        expected_text:
+          typeof body["expected_text"] === "string"
+            ? body["expected_text"].slice(0, 200)
+            : null,
+        goal_path:
+          typeof body["goal_path"] === "string"
+            ? body["goal_path"].slice(0, 200)
+            : null,
+      });
+
+      logEvent("site.connected", `Connected ${site.url}`, {
+        businessId: business.id,
+      });
+
+      // First check and crawl happen immediately, so the dashboard has
+      // something to show rather than an empty panel.
+      let crawl = null;
+      try {
+        await runMonitorSweep();
+        crawl = await crawlWebsite(site);
+      } catch (err) {
+        logEvent(
+          "site.crawl_failed",
+          err instanceof Error ? err.message : String(err),
+          { businessId: business.id, level: "warn" },
+        );
+      }
+
+      const base = config.publicUrl || `http://localhost:${config.port}`;
+      return ok({
+        website: site,
+        created: true,
+        crawl,
+        snippet: snippetFor(base, site.tracking_key),
+      });
+    }
+
+    if (method === "PATCH" && sub === "website") {
+      const site = websiteForBusiness(business.id);
+      if (!site) return missing("Website");
+      const patch: Record<string, string | number | null> = {};
+      if (typeof body["expected_text"] === "string") {
+        patch["expected_text"] = body["expected_text"].slice(0, 200) || null;
+      }
+      if (typeof body["goal_path"] === "string") {
+        patch["goal_path"] = body["goal_path"].slice(0, 200) || null;
+      }
+      if (typeof body["monitor_enabled"] === "boolean") {
+        patch["monitor_enabled"] = body["monitor_enabled"] ? 1 : 0;
+      }
+      return ok(updateWebsite(site.id, patch));
+    }
+
+    if (method === "DELETE" && sub === "website") {
+      const site = websiteForBusiness(business.id);
+      if (!site) return missing("Website");
+      deleteWebsite(site.id);
+      logEvent("site.disconnected", `Disconnected ${site.url}`, {
+        businessId: business.id,
+      });
+      return ok({ deleted: true });
+    }
+
+    if (method === "POST" && sub === "crawl") {
+      const site = websiteForBusiness(business.id);
+      if (!site) return missing("Website");
+      try {
+        return ok(await crawlWebsite(site));
+      } catch (err) {
+        return {
+          status: 502,
+          body: { error: err instanceof Error ? err.message : String(err) },
+        };
+      }
+    }
+
+    if (method === "POST" && sub === "check") {
+      const site = websiteForBusiness(business.id);
+      if (!site) return missing("Website");
+      await runMonitorSweep();
+      return ok(await checkWebsite(site));
+    }
+
     if (method === "GET" && sub === "plans") {
       return ok({ runs: listPlanRuns(business.id) });
     }
@@ -295,6 +431,12 @@ export async function handleApi(
   }
   if (method === "POST" && path === "/api/sweeps/plan") {
     return ok(await runPlanningSweep());
+  }
+  if (method === "POST" && path === "/api/sweeps/monitor") {
+    return ok(await runMonitorSweep());
+  }
+  if (method === "POST" && path === "/api/sweeps/crawl") {
+    return ok(await runCrawlSweep());
   }
 
   return missing("Route");

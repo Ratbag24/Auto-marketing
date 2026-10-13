@@ -124,3 +124,109 @@ CREATE TABLE IF NOT EXISTS events (
 );
 CREATE INDEX IF NOT EXISTS idx_events_recent
   ON events(created_at DESC);
+
+-- ===========================================================================
+-- Website intelligence: content, health and audience.
+-- ===========================================================================
+
+CREATE TABLE IF NOT EXISTS websites (
+  id              TEXT PRIMARY KEY,
+  business_id     TEXT NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+  url             TEXT NOT NULL,          -- origin, no trailing slash
+  -- Public key embedded in the tracking snippet. Not a secret: it only
+  -- authorises writing visits for this one site.
+  tracking_key    TEXT NOT NULL UNIQUE,
+  -- Set once the first beacon arrives, which proves the snippet is installed.
+  verified_at     TEXT,
+  monitor_enabled INTEGER NOT NULL DEFAULT 1,
+  -- Optional string that must appear in the homepage HTML. Catches the case
+  -- where the server returns 200 but the page is broken or empty.
+  expected_text   TEXT,
+  -- A visit to this path counts as a conversion.
+  goal_path       TEXT,
+  last_crawled_at TEXT,
+  created_at      TEXT NOT NULL,
+  UNIQUE (business_id, url)
+);
+
+CREATE TABLE IF NOT EXISTS pages (
+  id               TEXT PRIMARY KEY,
+  website_id       TEXT NOT NULL REFERENCES websites(id) ON DELETE CASCADE,
+  url              TEXT NOT NULL,
+  path             TEXT NOT NULL,
+  title            TEXT,
+  meta_description TEXT,
+  h1               TEXT,
+  excerpt          TEXT,                  -- first ~600 chars of visible text
+  word_count       INTEGER NOT NULL DEFAULT 0,
+  status_code      INTEGER,
+  internal_links   INTEGER NOT NULL DEFAULT 0,
+  external_links   INTEGER NOT NULL DEFAULT 0,
+  issues           TEXT NOT NULL DEFAULT '[]',  -- JSON string[]
+  crawled_at       TEXT NOT NULL,
+  UNIQUE (website_id, url)
+);
+CREATE INDEX IF NOT EXISTS idx_pages_site ON pages(website_id, crawled_at DESC);
+
+CREATE TABLE IF NOT EXISTS health_checks (
+  id                TEXT PRIMARY KEY,
+  website_id        TEXT NOT NULL REFERENCES websites(id) ON DELETE CASCADE,
+  checked_at        TEXT NOT NULL,
+  ok                INTEGER NOT NULL,
+  status_code       INTEGER,
+  response_ms       INTEGER,
+  ssl_days_left     INTEGER,
+  -- 'up' | 'down' | 'broken' | 'slow' | 'content_missing'
+  verdict           TEXT NOT NULL,
+  error             TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_health_site
+  ON health_checks(website_id, checked_at DESC);
+
+CREATE TABLE IF NOT EXISTS incidents (
+  id             TEXT PRIMARY KEY,
+  website_id     TEXT NOT NULL REFERENCES websites(id) ON DELETE CASCADE,
+  started_at     TEXT NOT NULL,
+  resolved_at    TEXT,
+  kind           TEXT NOT NULL,
+  detail         TEXT,
+  checks_failed  INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_incidents_site
+  ON incidents(website_id, started_at DESC);
+
+-- One row per pageview. No IP address is ever stored: visitor_hash is a
+-- daily-rotating salted digest, so a visitor cannot be followed across days.
+CREATE TABLE IF NOT EXISTS visits (
+  id              TEXT PRIMARY KEY,
+  website_id      TEXT NOT NULL REFERENCES websites(id) ON DELETE CASCADE,
+  business_id     TEXT NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+  occurred_at     TEXT NOT NULL,
+  visitor_hash    TEXT NOT NULL,
+  session_id      TEXT NOT NULL,
+  path            TEXT NOT NULL,
+  referrer        TEXT,
+  referrer_source TEXT,                  -- 'direct' | 'search' | 'social' | host
+  country         TEXT,                  -- ISO-3166 alpha-2 where known
+  region          TEXT,                  -- coarse region from tz or proxy
+  timezone        TEXT,
+  language        TEXT,
+  device          TEXT,                  -- 'mobile' | 'tablet' | 'desktop'
+  browser         TEXT,
+  os              TEXT,
+  utm_source      TEXT,
+  utm_medium      TEXT,
+  utm_campaign    TEXT,
+  -- Set to a content_items.id when the visit came from a post we published.
+  content_item_id TEXT,
+  is_entry        INTEGER NOT NULL DEFAULT 0,
+  is_goal         INTEGER NOT NULL DEFAULT 0,
+  duration_ms     INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_visits_site
+  ON visits(website_id, occurred_at DESC);
+CREATE INDEX IF NOT EXISTS idx_visits_business
+  ON visits(business_id, occurred_at DESC);
+CREATE INDEX IF NOT EXISTS idx_visits_session ON visits(session_id);
+CREATE INDEX IF NOT EXISTS idx_visits_attribution
+  ON visits(content_item_id) WHERE content_item_id IS NOT NULL;

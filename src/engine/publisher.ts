@@ -11,6 +11,8 @@ import {
   setItemStatus,
 } from "../db/index.js";
 import type { ContentItem } from "../db/types.js";
+import { websiteForBusiness } from "../db/websites.js";
+import { tagLinks } from "./attribution.js";
 
 /** Give up on an item after this many failed attempts. */
 const MAX_ATTEMPTS = 4;
@@ -78,7 +80,16 @@ async function publishOne(
 ): Promise<void> {
   try {
     const adapter = adapterFor(item.channel);
-    const { externalId, delivery } = await adapter.publish(item);
+
+    // Tag links to the business's own site so the resulting visits can be
+    // attributed back to this post. Done at send time, not at planning time,
+    // so a re-plan never invalidates an already-tagged link.
+    const site = websiteForBusiness(item.business_id);
+    const outgoing: ContentItem = site
+      ? { ...item, body: tagLinks(item.body, item, site) }
+      : item;
+
+    const { externalId, delivery } = await adapter.publish(outgoing);
     markPublished(item.id, externalId, delivery);
 
     if (delivery === "simulated") {

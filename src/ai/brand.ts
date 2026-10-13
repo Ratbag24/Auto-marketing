@@ -1,7 +1,43 @@
 import { getAiClient, type AiClient } from "./client.js";
 import { BrandProfileSchema } from "./schemas.js";
 import { saveBrandProfile, logEvent } from "../db/index.js";
+import { listPages, websiteForBusiness } from "../db/websites.js";
 import type { Business, BrandProfile } from "../db/types.js";
+
+/**
+ * Summarises what the crawler read from the business's own site.
+ *
+ * This is the single biggest quality lever in the whole product: a brand
+ * profile built from the real site beats one inferred from a one-line
+ * description, and it costs the business nothing extra to provide.
+ */
+function siteEvidence(businessId: string): string {
+  const site = websiteForBusiness(businessId);
+  if (!site) return "";
+
+  const pages = listPages(site.id, 25).filter((p) => p.word_count > 40);
+  if (pages.length === 0) return "";
+
+  const lines = pages.slice(0, 12).map((page) => {
+    const parts = [`- ${page.path}`];
+    if (page.title) parts.push(`  title: ${page.title}`);
+    if (page.meta_description) parts.push(`  description: ${page.meta_description}`);
+    if (page.h1 && page.h1 !== page.title) parts.push(`  heading: ${page.h1}`);
+    if (page.excerpt) parts.push(`  text: ${page.excerpt.slice(0, 320)}`);
+    return parts.join("\n");
+  });
+
+  return `
+
+THEIR ACTUAL WEBSITE
+These pages were read from the business's own site. Treat them as the most
+reliable description of what this business really offers, and prefer them over
+inference wherever they conflict with the brief above. Specific services,
+guarantees and details stated here are facts you may use; anything not stated
+here or in the brief is not.
+
+${lines.join("\n")}`;
+}
 
 const SYSTEM = `You are a senior brand strategist. You turn a thin business \
 brief into a rigorous, reusable brand profile that a marketing engine will \
@@ -27,7 +63,7 @@ Business name: ${business.name}
 What they sell: ${business.one_liner}
 Who they sell to: ${business.audience}
 Desired tone: ${business.tone}
-Website: ${business.website ?? "(not provided)"}
+Website: ${business.website ?? "(not provided)"}${siteEvidence(business.id)}
 
 Return the complete profile.`;
 
@@ -46,13 +82,20 @@ Return the complete profile.`;
     voice: value.voice,
   });
 
-  logEvent("brand.generated", `Brand profile v${saved.version} generated`, {
-    businessId: business.id,
-    data: {
-      pillars: value.pillars.map((p) => p.name),
-      usage,
+  const usedSite = siteEvidence(business.id) !== "";
+  logEvent(
+    "brand.generated",
+    `Brand profile v${saved.version} generated` +
+      (usedSite ? " from the live website" : " from the brief alone"),
+    {
+      businessId: business.id,
+      data: {
+        pillars: value.pillars.map((p) => p.name),
+        used_site_content: usedSite,
+        usage,
+      },
     },
-  });
+  );
 
   return saved;
 }

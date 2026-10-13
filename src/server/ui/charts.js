@@ -28,7 +28,10 @@ export function fmtNum(n) {
 }
 
 export function fmtPct(x, digits = 2) {
-  return `${(x * 100).toFixed(digits)}%`;
+  const pct = x * 100;
+  // A real but tiny share must not render as a flat 0%, which reads as none.
+  if (pct > 0 && pct < 1 / 10 ** digits) return `<0.${"0".repeat(digits - 1)}1%`;
+  return `${pct.toFixed(digits)}%`;
 }
 
 function niceCeil(max) {
@@ -54,6 +57,9 @@ export function lineChart(container, points, opts = {}) {
     format = fmtNum,
     yMax: forcedMax,
     label = "value",
+    // How a point's `date` is rendered on the axis. The default suits a daily
+    // series; an hourly one passes its own.
+    xLabel = (iso) => iso.slice(5).replace("-", "/"),
   } = opts;
 
   container.innerHTML = "";
@@ -145,7 +151,7 @@ export function lineChart(container, points, opts = {}) {
   );
 
   // First and last date labels only - a label per point would collide.
-  const dateLabel = (iso) => iso.slice(5).replace("-", "/");
+  const dateLabel = xLabel;
   svg.appendChild(
     el(
       "text",

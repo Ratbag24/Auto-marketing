@@ -5,6 +5,8 @@ import { fileURLToPath } from "node:url";
 import { timingSafeEqual } from "node:crypto";
 import { config } from "../config.js";
 import { handleApi } from "./api.js";
+import { collect, type CollectPayload } from "../web/collect.js";
+import { trackerScript } from "../web/tracker.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -25,6 +27,21 @@ function uiDir(): string {
     }
   }
   throw new Error("Could not locate the dashboard UI directory");
+}
+
+/**
+ * The visitor's address, used only to derive a daily-rotating hash - it is
+ * never stored. x-forwarded-for is trusted because this process is expected to
+ * sit behind a proxy; without one the socket address is already correct.
+ */
+function clientIp(req: IncomingMessage): string {
+  const forwarded = req.headers["x-forwarded-for"];
+  const raw = Array.isArray(forwarded) ? forwarded[0] : forwarded;
+  if (raw) {
+    const first = raw.split(",")[0]?.trim();
+    if (first) return first;
+  }
+  return req.socket.remoteAddress ?? "0.0.0.0";
 }
 
 function constantTimeEquals(a: string, b: string): boolean {
@@ -60,13 +77,13 @@ function authorized(req: IncomingMessage): boolean {
   return false;
 }
 
-async function readBody(req: IncomingMessage): Promise<unknown> {
+async function readBody(req: IncomingMessage, limit = 1_000_000): Promise<unknown> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of req) {
     const buf = chunk as Buffer;
     size += buf.length;
-    if (size > 1_000_000) throw new Error("Request body too large");
+    if (size > limit) throw new Error("Request body too large");
     chunks.push(buf);
   }
   if (chunks.length === 0) return {};
@@ -110,6 +127,60 @@ export function startServer(): void {
       if (url.pathname === "/health") {
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ ok: true }));
+        return;
+      }
+
+      // ---- public tracking endpoints -------------------------------------
+      // These sit before the auth gate on purpose: they are called by ordinary
+      // visitors on the customer's website, who have no admin token.
+
+      if (url.pathname === "/t.js") {
+        const base = config.publicUrl || `http://localhost:${config.port}`;
+        res.writeHead(200, {
+          "Content-Type": "text/javascript; charset=utf-8",
+          "Cache-Control": "public, max-age=3600",
+          "Access-Control-Allow-Origin": "*",
+        });
+        res.end(trackerScript(`${base}/api/collect`));
+        return;
+      }
+
+      if (url.pathname === "/api/collect") {
+        if (req.method === "OPTIONS") {
+          res.writeHead(204, {
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "POST, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type",
+            "Access-Control-Max-Age": "86400",
+          });
+          res.end();
+          return;
+        }
+        if (req.method !== "POST") {
+          res.writeHead(405, { "Access-Control-Allow-Origin": "*" });
+          res.end();
+          return;
+        }
+
+        // Always answer 204 regardless of outcome. A public endpoint that
+        // reports why it rejected something tells an attacker which tracking
+        // keys are real.
+        const answer = () => {
+          res.writeHead(204, { "Access-Control-Allow-Origin": "*" });
+          res.end();
+        };
+
+        try {
+          const body = (await readBody(req, 8192)) as CollectPayload;
+          collect(body, {
+            ip: clientIp(req),
+            userAgent: String(req.headers["user-agent"] ?? ""),
+            headers: req.headers as Record<string, string | string[] | undefined>,
+          });
+        } catch {
+          /* malformed beacon - drop it silently */
+        }
+        answer();
         return;
       }
 

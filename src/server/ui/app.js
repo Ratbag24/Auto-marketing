@@ -1,4 +1,5 @@
 import { barChart, lineChart, fmtNum, fmtPct } from "./charts.js";
+import { renderWebsite, wireSnippetCopy } from "./site.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -12,6 +13,7 @@ const CHANNEL_LABELS = {
 
 let overview = null;
 let stats = null;
+let site = null;
 let currentId = null;
 
 async function api(path, options = {}) {
@@ -376,6 +378,7 @@ async function load(id) {
   select.value = currentId;
 
   stats = await api(`/businesses/${currentId}`);
+  site = await api(`/businesses/${currentId}/website`);
 
   $("main").hidden = false;
   // The onboarding card stays available so further businesses can be added.
@@ -389,6 +392,7 @@ async function load(id) {
   renderQueues();
   renderChannels();
   renderEvents();
+  renderWebsite(site, { onAction: runBusinessAction });
   await renderReview();
 }
 
@@ -413,6 +417,11 @@ try {
   if (saved) document.documentElement.dataset.theme = saved;
 } catch {
   /* ignore */
+}
+
+/** Runs a POST against the current business and refreshes. */
+async function runBusinessAction(button, action, label) {
+  return runAction(button, `/businesses/${currentId}/${action}`, label);
 }
 
 async function runAction(button, path, label) {
@@ -488,6 +497,35 @@ $("onboard-form").addEventListener("submit", async (event) => {
     form.reset();
     status.textContent = `Created. ${result.plan?.items_created ?? 0} items planned.`;
     await load(result.business.id);
+  } catch (err) {
+    status.textContent = err.message;
+  } finally {
+    submit.disabled = false;
+  }
+});
+
+wireSnippetCopy();
+
+$("site-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const submit = $("s-submit");
+  const status = $("s-status");
+  submit.disabled = true;
+  status.textContent = "Checking the address, then reading the site…";
+
+  try {
+    const result = await api(`/businesses/${currentId}/website`, {
+      method: "POST",
+      body: JSON.stringify({
+        url: $("s-url").value,
+        expected_text: $("s-expect").value || null,
+        goal_path: $("s-goal").value || null,
+      }),
+    });
+    status.textContent = result.crawl
+      ? `Connected. Read ${result.crawl.pagesCrawled} pages.`
+      : "Connected.";
+    await load(currentId);
   } catch (err) {
     status.textContent = err.message;
   } finally {

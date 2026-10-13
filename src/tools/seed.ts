@@ -13,6 +13,7 @@ import {
   createBusiness,
   enableChannel,
   getDb,
+  nowIso,
   listContentItems,
   logEvent,
   recordMetrics,
@@ -20,6 +21,18 @@ import {
 import { runPublishSweep } from "../engine/publisher.js";
 import { simulateMetrics } from "../channels/simulate.js";
 import { CampaignPlanSchema, BrandProfileSchema } from "../ai/schemas.js";
+import {
+  createWebsite,
+  markVerified,
+  recordHealthCheck,
+  recordVisit,
+  savePage,
+  startIncident,
+  resolveIncident,
+  touchCrawl,
+  updateWebsite,
+} from "../db/websites.js";
+import { campaignTag } from "../web/analytics.js";
 
 const DEMO_BRAND = {
   positioning:
@@ -196,12 +209,184 @@ async function seed(): Promise<void> {
     measured += 1;
   }
 
+  // ---- website: pages, health history and visitor traffic ----------------
+  // All of it clearly synthetic, so the new panels have something to show
+  // without pointing the crawler at a real site.
+  const site = createWebsite(business.id, "https://northgate.example", {
+    expected_text: "Book an appointment",
+    goal_path: "/booking/confirmed",
+  });
+  markVerified(site.id);
+  // northgate.example is not a real domain, so live checks would immediately
+  // overwrite the synthetic history below with a genuine "unreachable".
+  // Pause monitoring on the demo site; a real site you connect is monitored.
+  updateWebsite(site.id, { monitor_enabled: 0 });
+
+  const DEMO_PAGES = [
+    { path: "/", title: "Northgate Dental — Evening and Saturday appointments",
+      h1: "Dentistry that fits around work", words: 420, issues: [] },
+    { path: "/prices", title: "Our prices", h1: "What treatment costs",
+      words: 310, issues: [] },
+    { path: "/book", title: "Book an appointment", h1: "Book online",
+      words: 180, issues: ["No meta description"] },
+    { path: "/emergency", title: "Emergency appointments", h1: "Same-week emergency slots",
+      words: 240, issues: [] },
+    { path: "/about", title: "About", h1: "About the practice",
+      words: 95, issues: ["Very little text on the page", "2 images missing alt text"] },
+    { path: "/nervous-patients", title: "Nervous patients", h1: "If you are nervous",
+      words: 350, issues: ["3 images missing alt text"] },
+  ];
+
+  for (const page of DEMO_PAGES) {
+    savePage({
+      website_id: site.id,
+      url: `https://northgate.example${page.path}`,
+      path: page.path,
+      title: page.title,
+      meta_description: page.issues.includes("No meta description")
+        ? null
+        : `${page.title}. Northgate Dental.`,
+      h1: page.h1,
+      excerpt: `${page.h1}. Evening and Saturday appointments, fixed published prices.`,
+      word_count: page.words,
+      status_code: 200,
+      internal_links: 6,
+      external_links: 1,
+      issues: page.issues,
+    });
+  }
+  touchCrawl(site.id, nowIso());
+
+  // Health history: mostly up, with one short outage two days ago.
+  const CHECK_EVERY_MS = 30 * 60_000;
+  const checksBack = 7 * 24 * 2; // a week at half-hourly
+  const outageStart = Date.now() - 2 * 86_400_000;
+  const outageEnd = outageStart + 70 * 60_000;
+  let incidentId: string | null = null;
+
+  for (let i = checksBack; i >= 0; i -= 1) {
+    const at = Date.now() - i * CHECK_EVERY_MS;
+    const inOutage = at >= outageStart && at <= outageEnd;
+    const slow = !inOutage && Math.sin(i / 7) > 0.93;
+
+    recordHealthCheck(
+      {
+        website_id: site.id,
+        ok: !inOutage,
+        status_code: inOutage ? 503 : 200,
+        response_ms: inOutage ? 0 : slow ? 3400 + (i % 300) : 210 + (i % 180),
+        ssl_days_left: 46,
+        verdict: inOutage ? "down" : slow ? "slow" : "up",
+        error: inOutage ? "Server error 503" : null,
+      },
+      new Date(at).toISOString(),
+    );
+
+    if (inOutage && incidentId === null) {
+      incidentId = startIncident(
+        site.id,
+        "down",
+        "Server error 503",
+        new Date(at).toISOString(),
+      ).id;
+    }
+    if (!inOutage && incidentId !== null) {
+      resolveIncident(incidentId, new Date(at).toISOString());
+      incidentId = null;
+    }
+  }
+
+  // Visitor traffic: 30 days, weighted towards the UK, mostly mobile, with a
+  // slice attributed to published posts.
+  const COUNTRIES: [string, string, number][] = [
+    ["GB", "Europe/London", 62],
+    ["IE", "Europe/Dublin", 9],
+    ["US", "America/New_York", 14],
+    ["AU", "Australia/Sydney", 6],
+    ["DE", "Europe/Berlin", 5],
+    ["CA", "America/Toronto", 4],
+  ];
+  const SOURCES: [string, string | null][] = [
+    ["direct", null],
+    ["search:google.com", "https://www.google.com/"],
+    ["social:linkedin.com", "https://linkedin.com/feed"],
+    ["social:x.com", "https://x.com/"],
+    ["referral:localdirectory.example", "https://localdirectory.example/dentists"],
+  ];
+  const PATHS = ["/", "/prices", "/book", "/emergency", "/about", "/nervous-patients"];
+  const publishedIds = published.map((p) => p.id);
+
+  let visitCount = 0;
+  for (let day = 29; day >= 0; day -= 1) {
+    const dayStart = Date.now() - day * 86_400_000;
+    // Traffic grows slowly and dips at weekends.
+    const weekday = new Date(dayStart).getUTCDay();
+    const base = 26 + Math.round((29 - day) * 0.9);
+    const sessions = Math.max(6, weekday === 0 || weekday === 6 ? base - 12 : base);
+
+    for (let s = 0; s < sessions; s += 1) {
+      const sessionId = `sess_${day}_${s}`;
+      const pick = <T,>(arr: T[], seed: number) => arr[(day * 7 + s * 3 + seed) % arr.length]!;
+      const [country, timezone] = (() => {
+        let roll = (day * 13 + s * 7) % 100;
+        for (const [c, tz, weight] of COUNTRIES) {
+          if (roll < weight) return [c, tz];
+          roll -= weight;
+        }
+        return ["GB", "Europe/London"];
+      })();
+      const [source, referrer] = pick(SOURCES, 1);
+      const device = (day + s) % 10 < 6 ? "mobile" : (day + s) % 10 < 9 ? "desktop" : "tablet";
+
+      // Posts bring a slice of the social traffic.
+      const fromPost =
+        source.startsWith("social") && publishedIds.length > 0 && (day + s) % 3 === 0;
+      const contentItemId = fromPost ? pick(publishedIds, 2) : null;
+
+      // One to three pages per session.
+      const depth = 1 + ((day + s) % 3);
+      for (let v = 0; v < depth; v += 1) {
+        const path = v === 0 ? "/" : pick(PATHS, v + 4);
+        recordVisit(
+          {
+            website_id: site.id,
+            business_id: business.id,
+            visitor_hash: `demo_${day}_${s % 40}`,
+            session_id: sessionId,
+            path,
+            referrer: v === 0 ? referrer : `https://northgate.example/`,
+            referrer_source: v === 0 ? source : "internal:northgate.example",
+            country,
+            region: timezone.split("/")[0] === "America" ? "Americas" : timezone.split("/")[0]!,
+            timezone,
+            language: country === "GB" ? "en-GB" : "en-US",
+            device,
+            browser: device === "mobile" ? "Safari" : "Chrome",
+            os: device === "mobile" ? "iOS" : "Windows",
+            utm_source: contentItemId ? source.split(":")[0]! : null,
+            utm_medium: contentItemId ? "social" : null,
+            utm_campaign: contentItemId ? campaignTag(contentItemId) : null,
+            content_item_id: contentItemId,
+            is_entry: v === 0 ? 1 : 0,
+            // A small share of deep sessions reach the booking confirmation.
+            is_goal: v === depth - 1 && depth === 3 && (day + s) % 4 === 0 ? 1 : 0,
+            duration_ms: 20_000 + ((day * s) % 90) * 1000,
+          },
+          new Date(dayStart + (9 + (s % 12)) * 3600_000 + s * 37_000).toISOString(),
+        );
+        visitCount += 1;
+      }
+    }
+  }
+
   logEvent("system.seeded", "Demo data seeded", { businessId: business.id });
 
   console.log(`Seeded ${business.name} (${business.id})`);
   console.log(`  planned:   ${plan.itemsCreated} items`);
   console.log(`  published: ${publish.published + publish.simulated} (all simulated)`);
   console.log(`  measured:  ${measured} items, with daily history`);
+  console.log(`  website:   ${DEMO_PAGES.length} pages, ${checksBack + 1} health checks, ${visitCount} visits`);
+  console.log(`             (monitoring paused - the demo domain is not real)`);
   console.log(`\nStart the server with: npm start`);
 }
 

@@ -1,17 +1,25 @@
 # Auto-marketing
 
-An autonomous marketing engine. A business gives it five fields once; it
-generates a brand strategy, writes a multi-channel content calendar, publishes
-on schedule, measures what happened, and feeds that measurement back into the
-next planning cycle.
+An autonomous marketing engine. A business gives it five fields and a website
+address; it reads the site, generates a brand strategy, writes a multi-channel
+content calendar, publishes on schedule, measures what happened on both the
+channels and the website, and feeds all of it back into the next planning cycle.
+
+It also watches the website itself: whether it is up, how fast it responds, and
+whether it is quietly broken.
 
 It is built to run unattended on one small server, with no queue service, no
 worker fleet and no cron daemon.
 
 ```
-five fields ──► brand profile ──► campaign plan ──► publish ──► measure
-                     ▲                                             │
-                     └──────────── performance feedback ◄───────────┘
+  five fields ─┐
+               ├─► brand profile ──► campaign plan ──► publish ──► measure
+  your website ┘         ▲                                │           │
+       │                 └──────── performance feedback ◄─┴───────────┘
+       │
+       ├─► content crawl ──► what you actually offer, and SEO problems
+       ├─► health checks ──► up / slow / broken / content missing
+       └─► visitor tracking ──► who, where, how they arrived, what converted
 ```
 
 ## Quick start
@@ -29,6 +37,66 @@ business with a fortnight of content and a fortnight of simulated performance,
 so you can see the whole product working before wiring anything up.
 
 Requires Node 22.5+ (it uses the built-in `node:sqlite`).
+
+## Your website
+
+Connecting a website is one field in the dashboard, and it turns on three
+things at once.
+
+**It reads your content.** A polite same-origin crawler (robots.txt honoured,
+40 pages, one request at a time) extracts every page's title, description,
+headings and text. That content is then fed into brand profile generation,
+which is the single biggest quality lever in the product: a strategy built from
+your real site beats one inferred from a one-line description. The same pass
+reports the SEO problems worth fixing - missing titles and descriptions, thin
+pages, absent H1s, no mobile viewport, images without alt text.
+
+**It watches whether the site works.** Every five minutes: is it reachable,
+what status code, how long did it take, how long until the TLS certificate
+expires, and - if you give it a string to look for - is the page still actually
+rendering its content. That last check catches the nastiest failure mode, where
+the server returns a confident 200 for a page that is empty or broken. Results
+are classified as `up`, `slow`, `broken`, `content_missing` or `down`, and two
+consecutive failures open an incident so a single blip does not cry wolf.
+
+**It shows you the audience.** A small tracking snippet reports pageviews.
+From those you get visitors and sessions over time, countries and regions,
+device and browser mix, how people arrived (direct, search, social, referral),
+your most-read pages, pages per visit, time on site, and goal completions.
+
+### Attribution
+
+Links to your own site inside published posts are rewritten at send time with
+UTM parameters identifying the exact content item. When that visitor lands, the
+visit is joined back to the post that produced it, and the dashboard shows
+which posts actually brought people - and which brought people who converted.
+This is what turns engagement metrics into something connected to revenue.
+
+Only your own origin is rewritten; third-party links are left exactly as
+written.
+
+### Privacy
+
+**No IP address is ever stored.** Visitors are identified by a salted hash, and
+the salt rotates daily, so the same person is unrecognisable across days and
+nothing in the database can be traced back to an address. The snippet sets no
+cookies and reads nothing but a per-tab session id. Query strings are stripped
+from stored paths. Bots are dropped before they reach the statistics.
+
+That design is intended to avoid needing a cookie banner in most
+jurisdictions - confirm that for yours before relying on it.
+
+### Where location comes from
+
+Country is read from whichever edge proxy sits in front of the server
+(Cloudflare, Vercel, Fastly, CloudFront are all recognised). With no such
+proxy, the browser's own timezone gives a coarse country and region at no cost
+and with no IP lookup. Unmapped timezones stay unknown rather than being
+guessed.
+
+If you would rather pull from Google Analytics than run the snippet, that is a
+GA4 Data API importer writing into the same `visits` table - the dashboard and
+the attribution join would not change.
 
 ## The five fields
 
@@ -62,7 +130,8 @@ must all be open before anything leaves the server:
 3. the item being in `scheduled` state, not `draft`
 
 **Measurement** polls each published item for up to 30 days, appending a row per
-sweep rather than overwriting, so performance is a time series.
+sweep rather than overwriting, so performance is a time series. Alongside it,
+site checks run every five minutes and crawls weekly.
 
 **Optimisation** turns those metrics into the next planning brief: engagement
 rate by channel, by content pillar and by hour posted, plus the strongest and
@@ -145,10 +214,18 @@ to the calendar.
 
 ## Dashboard
 
-`http://localhost:8787` — reach and engagement trends, engagement rate by
-channel, pillar and hour posted, the live queue, the review queue, channel
-status, model spend and the activity log. Light and dark themes, no build step,
-no chart library, no CDN.
+`http://localhost:8787` — two halves.
+
+*Marketing:* reach and engagement trends, engagement rate by channel, pillar and
+hour posted, the live queue, the review queue, channel status, model spend and
+the activity log.
+
+*Website:* current status with uptime and TLS expiry, response time history,
+incident log, visitors over time, countries, traffic sources, device mix,
+most-read pages, the posts that brought visitors, and the content problems found
+on the site.
+
+Light and dark themes, no build step, no chart library, no CDN.
 
 Access is guarded by `ADMIN_TOKEN`. If it is unset the server refuses anything
 but localhost rather than silently exposing the dashboard. Visit
@@ -173,7 +250,13 @@ timers, set the intervals very high and hit the endpoints directly:
 POST /api/sweeps/publish
 POST /api/sweeps/metrics
 POST /api/sweeps/plan
+POST /api/sweeps/monitor
+POST /api/sweeps/crawl
 ```
+
+Two routes are public by necessity, since ordinary visitors on your customer's
+site call them: `GET /t.js` serves the tracking snippet, and `POST /api/collect`
+receives beacons. Everything else is behind `ADMIN_TOKEN`.
 
 ## Layout
 
@@ -191,14 +274,24 @@ src/
     oauth1.ts          OAuth 1.0a signing (tested against X's published vector)
     email|x|linkedin|meta.ts
     simulate.ts        deterministic stand-in for an unconfigured channel
+  web/
+    url-guard.ts       SSRF protection: every outbound fetch is checked
+    html.ts            title/meta/text/link extraction and robots.txt
+    crawler.ts         polite same-origin crawl
+    monitor.ts         health checks, TLS expiry, incident logic
+    analytics.ts       visitor hashing, geo, device and referrer parsing
+    tracker.ts         the snippet served to customer sites
+    collect.ts         the public beacon endpoint's logic
   engine/
     publisher.ts       the publish sweep and its three gates
     metrics.ts         metric collection
     optimizer.ts       performance -> the next planning brief
-    stats.ts           dashboard aggregation
-    scheduler.ts       three timers; the whole scheduler
+    attribution.ts     UTM tagging of links to the business's own site
+    stats.ts           marketing dashboard aggregation
+    audience.ts        website health and audience aggregation
+    scheduler.ts       five timers; the whole scheduler
   server/              HTTP, JSON API and the dashboard
-tests/                 35 tests, node:test
+tests/                 105 tests, node:test
 ```
 
 ## Tests
@@ -212,14 +305,27 @@ rule, all three publish gates, retry versus permanent failure, attempt
 exhaustion, double-claim prevention, cold-start behaviour, and the
 repeated-polling cases that must not double-count metrics.
 
+On the website side: the SSRF guard against every private address range
+including cloud metadata, HTML and robots.txt parsing, that visitor hashes
+never contain an IP and cannot be linked across days or across sites, bot
+rejection, query-string stripping, bounce and session arithmetic, that internal
+navigation is excluded from arrival sources, that a tracking key cannot write
+visits for another site, and that link tagging never touches third-party URLs.
+
 ## Not built yet
 
 Honest list of what this does not do:
 
 - **No image or video generation**, which is why Instagram is inert and why
   Facebook and X posts are text-only.
-- **No conversion attribution.** Conversions are recorded but nothing populates
-  them; that needs your site analytics wired to the publish `external_id`.
+- **The crawler does not run JavaScript.** A site that renders entirely
+  client-side will read as nearly empty. Chromium is the fix, at real cost in
+  memory and complexity.
+- **Monitoring is from one location.** A regional outage that does not affect
+  this server will not be seen.
+- **No server-side goal validation.** A goal is a visit to a configured path.
+  That is enough for a booking confirmation page, but it cannot see a purchase
+  value or anything that happens in a payment processor.
 - **No multi-user auth.** One shared admin token, no accounts or roles.
 - **No A/B testing** of variants within a cycle.
 - **No paid ads.** Organic channels only.

@@ -72,6 +72,109 @@
       </div>
     </section>
 
+    <!-- ================= website ================= -->
+    <section id="site-section">
+      <div class="card span2" id="site-connect" hidden>
+        <h2>Connect your website</h2>
+        <p class="hint">
+          Lets the engine read your pages, watch whether the site is up, and
+          show you who is visiting and where they come from.
+        </p>
+        <form id="site-form" class="row" style="align-items:flex-end">
+          <div class="field" style="flex:1 1 260px;margin:0">
+            <label for="s-url">Website address</label>
+            <input id="s-url" placeholder="https://yourbusiness.com" required>
+          </div>
+          <div class="field" style="flex:1 1 180px;margin:0">
+            <label for="s-expect">Text that must be on the page <span class="muted">(optional)</span></label>
+            <input id="s-expect" placeholder="Book an appointment">
+          </div>
+          <div class="field" style="flex:0 1 150px;margin:0">
+            <label for="s-goal">Goal page <span class="muted">(optional)</span></label>
+            <input id="s-goal" placeholder="/thank-you">
+          </div>
+          <button class="primary" type="submit" id="s-submit">Connect</button>
+        </form>
+        <p class="help" id="s-status"></p>
+      </div>
+
+      <div id="site-panels" hidden>
+        <div class="grid">
+          <div class="card">
+            <h2>Site status</h2>
+            <p class="hint" id="site-url"></p>
+            <div id="site-health"></div>
+          </div>
+          <div class="card">
+            <h2>Response time</h2>
+            <p class="hint">Last 48 checks</p>
+            <div class="chart" id="chart-response"></div>
+            <div id="site-incidents" style="margin-top:14px"></div>
+          </div>
+        </div>
+
+        <div class="card span2" id="snippet-card" hidden>
+          <h2>Install the visitor tracker</h2>
+          <p class="hint">
+            Paste this before the closing &lt;/body&gt; tag on your site. It sets
+            no cookies and stores no IP addresses.
+          </p>
+          <pre class="snippet" id="site-snippet"></pre>
+          <button id="copy-snippet">Copy</button>
+        </div>
+
+        <div class="tiles" id="audience-tiles"></div>
+
+        <div class="grid">
+          <div class="card">
+            <h2>Visitors</h2>
+            <p class="hint">Unique visitors per day, last 30 days</p>
+            <div class="chart" id="chart-visitors"></div>
+          </div>
+          <div class="card">
+            <h2>Where they are</h2>
+            <p class="hint">Share of pageviews by country</p>
+            <div class="chart" id="chart-countries"></div>
+          </div>
+        </div>
+
+        <div class="grid thirds">
+          <div class="card">
+            <h2>How they arrive</h2>
+            <p class="hint">Traffic source</p>
+            <div class="chart" id="chart-sources"></div>
+          </div>
+          <div class="card">
+            <h2>What they use</h2>
+            <p class="hint">Device type</p>
+            <div class="chart" id="chart-devices"></div>
+          </div>
+          <div class="card">
+            <h2>Most-read pages</h2>
+            <p class="hint">By pageviews</p>
+            <div id="top-pages"></div>
+          </div>
+        </div>
+
+        <div class="grid">
+          <div class="card">
+            <h2>Posts that brought visitors</h2>
+            <p class="hint">Traced from tagged links in published content</p>
+            <div id="attributed"></div>
+          </div>
+          <div class="card">
+            <h2>Site content</h2>
+            <p class="hint" id="crawl-meta"></p>
+            <div id="site-issues"></div>
+            <div class="row" style="margin-top:14px">
+              <button id="recrawl">Re-read site</button>
+              <button id="recheck">Check now</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <section class="card" id="review-card" hidden>
       <h2>Awaiting review</h2>
       <p class="hint">Nothing here is published until you approve it</p>
