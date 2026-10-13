@@ -1,0 +1,26 @@
+{
+  "name": "autopilot-marketing",
+  "version": "0.1.0",
+  "description": "Autonomous marketing engine: generates, schedules and publishes multi-channel campaigns from a five-field brief, then tunes itself on measured performance.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node tools/copy-assets.mjs",
+    "start": "node --experimental-sqlite dist/src/index.js",
+    "dev": "npm run build && node --experimental-sqlite dist/src/index.js",
+    "test": "npm run build && node --experimental-sqlite --test dist/tests/*.test.js",
+    "seed": "npm run build && node --experimental-sqlite dist/src/tools/seed.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.73.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2"
+  },
+  "license": "UNLICENSED",
+  "private": true
+}
