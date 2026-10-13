@@ -7,6 +7,7 @@ import { config } from "../config.js";
 import { handleApi } from "./api.js";
 import { collect, type CollectPayload } from "../web/collect.js";
 import { trackerScript } from "../web/tracker.js";
+import { ipLimiter, siteLimiter } from "../web/rate-limit.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -170,10 +171,33 @@ export function startServer(): void {
           res.end();
         };
 
+        const ip = clientIp(req);
+
+        // Per-address limit first, before the key is even read. A 429 here
+        // leaks nothing about which keys exist, and lets a well-behaved
+        // client back off instead of hammering.
+        if (!ipLimiter.take(ip)) {
+          res.writeHead(429, {
+            "Access-Control-Allow-Origin": "*",
+            "Retry-After": String(Math.max(1, ipLimiter.retryAfter(ip))),
+          });
+          res.end();
+          return;
+        }
+
         try {
           const body = (await readBody(req, 8192)) as CollectPayload;
+
+          // Per-site limit catches an attack spread across many addresses.
+          // This one answers 204, because a 429 would confirm the key is real.
+          const key = typeof body?.k === "string" ? body.k.slice(0, 64) : "";
+          if (key === "" || !siteLimiter.take(key)) {
+            answer();
+            return;
+          }
+
           collect(body, {
-            ip: clientIp(req),
+            ip,
             userAgent: String(req.headers["user-agent"] ?? ""),
             headers: req.headers as Record<string, string | string[] | undefined>,
           });

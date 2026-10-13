@@ -50,7 +50,7 @@
       </div>
       <div class="card">
         <h2>By hour posted</h2>
-        <p class="hint">Engagement rate, UTC</p>
+        <p class="hint">Engagement rate, local time</p>
         <div class="chart" id="chart-hour"></div>
       </div>
     </section>
@@ -234,6 +234,14 @@
       <div class="field">
         <label>Channels</label>
         <div class="checks" id="f-channels"></div>
+      </div>
+      <div class="field">
+        <label for="f-tz">Timezone</label>
+        <input id="f-tz" name="timezone" list="tz-list">
+        <datalist id="tz-list"></datalist>
+        <p class="help">
+          Posting times are chosen in this zone. Prefilled from your browser.
+        </p>
       </div>
       <div class="field">
         <label for="f-vol">Posts per week</label>

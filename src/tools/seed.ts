@@ -124,7 +124,7 @@ const stubClient: AiClient = {
             hashtags: channel === "email" ? [] : ["dentistry", "northgate"],
             cta: "Book online in under a minute.",
             day_offset: day,
-            hour_utc: idx === 0 ? 9 : 16,
+            hour_local: idx === 0 ? 9 : 16,
             rationale: "Seeded demo content.",
           });
         }

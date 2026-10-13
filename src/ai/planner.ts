@@ -14,6 +14,7 @@ import {
   startPlanRun,
 } from "../db/index.js";
 import type { BrandProfile, Business, Channel } from "../db/types.js";
+import { safeTimeZone, scheduleAt } from "../util/timezone.js";
 
 export interface PlanOptions {
   /** Length of the calendar to produce. */
@@ -59,6 +60,7 @@ Sells: ${business.one_liner}
 Audience: ${business.audience}
 Tone: ${business.tone}
 Website: ${business.website ?? "(none)"}
+Local timezone: ${safeTimeZone(business.timezone)}
 
 POSITIONING
 ${brand.positioning}
@@ -98,7 +100,11 @@ Write persuasively from what you know.
 7. Vary structure and opening lines across the calendar. Repetition across a \
 month reads as automation and kills engagement.
 8. 'subject' is required for email and must be an empty string for every \
-other channel. 'hashtags' must be empty for email.`;
+other channel. 'hashtags' must be empty for email.
+9. 'hour_local' is the hour where this audience lives, not UTC. Pick hours a \
+real person in ${safeTimeZone(business.timezone)} would be awake and reachable. \
+Never schedule between 23:00 and 06:00 local unless the audience is \
+specifically nocturnal.`;
 }
 
 function buildUserPrompt(
@@ -114,7 +120,7 @@ Produce approximately ${targetCount} content items spread across these \
 channels: ${channels.join(", ")}.
 
 Spread them sensibly across the window using day_offset (0 to ${windowDays - 1}) \
-and hour_utc. Do not bunch several posts into the same hour. Respect normal \
+and hour_local. Do not bunch several posts into the same hour. Respect normal \
 expectations for cadence: email is the most intrusive channel and should be \
 the least frequent.
 
@@ -215,9 +221,14 @@ export async function planCampaign(
         continue;
       }
 
-      const scheduledAt = new Date(from.getTime());
-      scheduledAt.setUTCDate(scheduledAt.getUTCDate() + item.day_offset);
-      scheduledAt.setUTCHours(item.hour_utc, 0, 0, 0);
+      // The model picked a wall-clock hour in the business's own zone; this is
+      // where that becomes a real instant, daylight saving included.
+      const scheduledAt = scheduleAt(
+        from,
+        item.day_offset,
+        item.hour_local,
+        business.timezone,
+      );
       // A slot that has already passed goes out on the next sweep rather than
       // being silently dropped.
       const when =

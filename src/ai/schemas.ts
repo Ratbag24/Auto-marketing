@@ -81,12 +81,15 @@ export const PlannedItemSchema = z.object({
     .min(0)
     .max(27)
     .describe("Days from the start of the window on which to publish"),
-  hour_utc: z
+  hour_local: z
     .number()
     .int()
     .min(0)
     .max(23)
-    .describe("Hour of day in UTC to publish"),
+    .describe(
+      "Hour of day to publish, in the business's own local time - not UTC. " +
+        "9 means 9am where the audience is.",
+    ),
   rationale: z
     .string()
     .describe("One sentence: why this piece, this channel, this slot"),

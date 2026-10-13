@@ -1,4 +1,5 @@
-import { latestMetricsByItem, listContentItems } from "../db/index.js";
+import { getBusiness, latestMetricsByItem, listContentItems } from "../db/index.js";
+import { localHour, safeTimeZone } from "../util/timezone.js";
 import type { Channel, ContentItem, MetricRow } from "../db/types.js";
 
 /**
@@ -65,6 +66,7 @@ export const COLD_START_THRESHOLD = 8;
 
 export function buildPerformanceReport(businessId: string): PerformanceReport {
   const metrics = latestMetricsByItem(businessId);
+  const timeZone = safeTimeZone(getBusiness(businessId)?.timezone);
   const items = listContentItems(businessId, { limit: 500 });
   const byId = new Map<string, ContentItem>(items.map((i) => [i.id, i]));
 
@@ -104,8 +106,9 @@ export function buildPerformanceReport(businessId: string): PerformanceReport {
     bump(channels, item.channel);
     bump(pillars, item.pillar);
     if (item.published_at) {
-      const hour = new Date(item.published_at).getUTCHours();
-      bump(hours, String(hour).padStart(2, "0"));
+      // Bucketed in the business's local time so "best hour" means the same
+      // thing here as it does in the plan.
+      bump(hours, String(localHour(item.published_at, timeZone)).padStart(2, "0"));
     }
 
     scored.push({ item, rate: rate(eng, m.impressions) });
@@ -193,7 +196,7 @@ on any one bet yet.`;
     .slice(0, 4);
   if (bestHours.length > 0) {
     lines.push(
-      "\nBest posting hours (UTC): " +
+      "\nBest posting hours (local time): " +
         bestHours.map((h) => `${h.key}:00 (${pct(h.engagement_rate)})`).join(", "),
     );
   }

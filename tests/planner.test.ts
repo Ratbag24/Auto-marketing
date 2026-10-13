@@ -13,7 +13,7 @@ const base: PlannedItem = {
   hashtags: ["dentistry"],
   cta: "Book online",
   day_offset: 1,
-  hour_utc: 9,
+  hour_local: 9,
   rationale: "test",
 };
 

@@ -23,6 +23,7 @@ import { runPublishSweep } from "../engine/publisher.js";
 import { runPlanningSweep } from "../engine/scheduler.js";
 import { buildBusinessStats } from "../engine/stats.js";
 import { buildWebsiteOverview } from "../engine/audience.js";
+import { isValidTimeZone } from "../util/timezone.js";
 import { runMonitorSweep, checkWebsite } from "../web/monitor.js";
 import { crawlWebsite } from "../web/crawler.js";
 import { runCrawlSweep } from "../engine/scheduler.js";
@@ -127,9 +128,20 @@ export async function handleApi(
         ? Math.min(50, Math.round(body["weekly_volume"]))
         : 10;
 
+    // An invalid zone would silently schedule everything in UTC, so refuse it
+    // rather than quietly getting the times wrong.
+    const timezone =
+      typeof body["timezone"] === "string" && body["timezone"] !== ""
+        ? body["timezone"]
+        : "UTC";
+    if (!isValidTimeZone(timezone)) {
+      return bad(`"${timezone}" is not a recognised IANA timezone.`);
+    }
+
     const business = createBusiness({
       ...fields,
       website,
+      timezone,
       weekly_volume: weeklyVolume,
       approval_mode:
         body["approval_mode"] === "review" ? "review" : "auto",
@@ -359,7 +371,13 @@ export async function handleApi(
           Math.max(1, Math.round(body["weekly_volume"])),
         );
       }
-      for (const field of ["name", "one_liner", "audience", "tone", "timezone"]) {
+      if (typeof body["timezone"] === "string" && body["timezone"] !== "") {
+        if (!isValidTimeZone(body["timezone"])) {
+          return bad(`"${body["timezone"]}" is not a recognised IANA timezone.`);
+        }
+        patch["timezone"] = body["timezone"];
+      }
+      for (const field of ["name", "one_liner", "audience", "tone"]) {
         if (typeof body[field] === "string" && body[field] !== "") {
           patch[field] = body[field] as string;
         }

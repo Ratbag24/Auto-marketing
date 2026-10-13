@@ -86,6 +86,19 @@ from stored paths. Bots are dropped before they reach the statistics.
 That design is intended to avoid needing a cookie banner in most
 jurisdictions - confirm that for yours before relying on it.
 
+### Rate limiting
+
+The tracking key is visible in the page source of every site that installs the
+snippet, so anyone can read one and post traffic with it. Two token buckets
+bound the damage: 60 beacons a minute per visitor address, and 600 burst / 300
+a minute sustained per site. An address over its limit gets a `429` with
+`Retry-After`; a key over its limit gets the same `204` as everything else, so
+the response never confirms whether a key is real.
+
+Eviction drops the *fullest* buckets rather than the oldest. That matters: an
+attacker who could force their own throttled bucket out of memory by flooding
+with throwaway keys would get a fresh burst each time.
+
 ### Where location comes from
 
 Country is read from whichever edge proxy sits in front of the server
@@ -109,6 +122,7 @@ Onboarding asks for exactly this much:
 | Who you sell to | Working adults and families within 10 miles |
 | How you want to sound | Warm, plain-spoken, practical |
 | Website *(optional)* | https://… |
+| Timezone | Europe/London — prefilled from your browser |
 
 From those, the engine generates a **brand profile**: positioning, value
 propositions, audience segments, four to six content pillars, and a voice guide
@@ -121,6 +135,13 @@ ongoing input requirement effectively zero.
 **Planning** runs weekly per business, or early if the calendar is about to run
 dry. It reads the brand profile plus a performance brief and returns a dated
 calendar of finished, publishable copy.
+
+Posting times are chosen in the **business's own timezone**, not UTC. The
+planner is told the zone and asked for a local hour; the conversion to a real
+instant happens once, in `src/util/timezone.ts`, and handles daylight saving on
+both hemispheres as well as half-hour and 45-minute offsets. The "best posting
+hour" the optimiser reports is in the same local time, so the advice and the
+schedule mean the same thing.
 
 **Publishing** sweeps every five minutes for items that are due. Three gates
 must all be open before anything leaves the server:
@@ -274,8 +295,11 @@ src/
     oauth1.ts          OAuth 1.0a signing (tested against X's published vector)
     email|x|linkedin|meta.ts
     simulate.ts        deterministic stand-in for an unconfigured channel
+  util/
+    timezone.ts        wall-clock <-> UTC, the only place conversion happens
   web/
     url-guard.ts       SSRF protection: every outbound fetch is checked
+    rate-limit.ts      token buckets for the public beacon endpoint
     html.ts            title/meta/text/link extraction and robots.txt
     crawler.ts         polite same-origin crawl
     monitor.ts         health checks, TLS expiry, incident logic
@@ -291,7 +315,7 @@ src/
     audience.ts        website health and audience aggregation
     scheduler.ts       five timers; the whole scheduler
   server/              HTTP, JSON API and the dashboard
-tests/                 105 tests, node:test
+tests/                 124 tests, node:test
 ```
 
 ## Tests
@@ -312,6 +336,14 @@ rejection, query-string stripping, bounce and session arithmetic, that internal
 navigation is excluded from arrival sources, that a tracking key cannot write
 visits for another site, and that link tagging never touches third-party URLs.
 
+On scheduling: every hour of the day round-trips exactly in six timezones
+across four dates, 9am stays 9am either side of a daylight-saving change in
+both hemispheres, half-hour and 45-minute offsets are correct, and an invalid
+zone falls back to UTC instead of throwing mid-sweep. On rate limiting: burst
+and refill behaviour, that idle time cannot bank requests, that keys are
+independent, that memory stays bounded under a flood of distinct keys, and that
+eviction cannot be used to escape a limit.
+
 ## Not built yet
 
 Honest list of what this does not do:
@@ -326,7 +358,16 @@ Honest list of what this does not do:
 - **No server-side goal validation.** A goal is a visit to a configured path.
   That is enough for a booking confirmation page, but it cannot see a purchase
   value or anything that happens in a payment processor.
-- **No multi-user auth.** One shared admin token, no accounts or roles.
+- **No multi-user auth.** One shared admin token, no accounts or roles. This is
+  the ceiling on selling it: there is no way for a customer to log in and see
+  only their own dashboard.
+- **No repetition guard.** The planner sees only a handful of excerpts of past
+  copy, so over many cycles it can drift into rewording itself.
+- **Unbounded tables.** `visits` and `health_checks` grow forever; they need
+  daily rollups and a prune job before this runs for a year.
+- **`node:sqlite` is experimental** and synchronous, so a slow query blocks the
+  event loop, beacons included. `better-sqlite3` is the same model without the
+  warning.
 - **No A/B testing** of variants within a cycle.
 - **No paid ads.** Organic channels only.
 - **Email recipients** come from a Resend audience you manage; there is no list

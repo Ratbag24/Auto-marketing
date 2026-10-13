@@ -227,6 +227,11 @@ function renderControls() {
       <label for="c-volume">Posts per week</label>
       <input id="c-volume" type="number" min="1" max="50" value="${b.weekly_volume}">
     </div>
+    <div class="field">
+      <label for="c-timezone">Timezone</label>
+      <input id="c-timezone" value="${esc(b.timezone)}" list="tz-list">
+      <p class="help">Posting times are chosen in this zone.</p>
+    </div>
     <button id="c-save">Save</button>
   `;
 
@@ -241,6 +246,7 @@ function renderControls() {
           autopilot: $("c-autopilot").value === "on",
           approval_mode: $("c-approval").value,
           weekly_volume: Number($("c-volume").value),
+          timezone: $("c-timezone").value,
         }),
       });
       await load(currentId);
@@ -461,6 +467,18 @@ $("f-channels").innerHTML = CHANNEL_CHOICES.map(
     `<label><input type="checkbox" value="${value}" ${on ? "checked" : ""}>${label}</label>`,
 ).join("");
 
+try {
+  $("f-tz").value = Intl.DateTimeFormat().resolvedOptions().timeZone ?? "UTC";
+  // supportedValuesOf is not in every browser; the field stays free text.
+  if (typeof Intl.supportedValuesOf === "function") {
+    $("tz-list").innerHTML = Intl.supportedValuesOf("timeZone")
+      .map((z) => `<option value="${z}"></option>`)
+      .join("");
+  }
+} catch {
+  $("f-tz").value = "UTC";
+}
+
 $("onboard-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = event.currentTarget;
@@ -490,6 +508,7 @@ $("onboard-form").addEventListener("submit", async (event) => {
         tone: data.get("tone"),
         website: data.get("website") || null,
         weekly_volume: Number(data.get("weekly_volume")),
+        timezone: data.get("timezone") || "UTC",
         approval_mode: data.get("approval_mode"),
         channels,
       }),
